@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+*.log
+*.mp4
+.cache/
+.venv*/
+checkpoints/
+eval_results/
+outputs/
+models/
+assets/
+datasets/
+.env
+.env.*
+!.env.example

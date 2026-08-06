@@ -1,0 +1,44 @@
+# syntax=docker/dockerfile:1.7
+# linux/arm64 only; build on an NVIDIA DGX Spark host.
+FROM --platform=linux/arm64 nvcr.io/nvidia/cuda:13.0.1-devel-ubuntu24.04
+
+ARG APP_UID=1000
+ARG APP_GID=1000
+ARG ROBOCASA_COMMIT=be22d659b02db8f6d7f3a3c3edc742934fdcbaae
+ARG ROBOSUITE_COMMIT=85abee228d1c43ab1939bce33028099945d453b4
+ARG PYTORCH_ARM64_INSTALL_COMMAND=""
+
+ENV DEBIAN_FRONTEND=noninteractive XR1_ATTN_IMPL=sdpa MUJOCO_GL=egl PYOPENGL_PLATFORM=egl \
+    NVIDIA_VISIBLE_DEVICES=all NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics \
+    HF_HOME=/cache/huggingface HF_MODULES_CACHE=/cache/huggingface/modules NUMBA_CACHE_DIR=/cache/numba \
+    MODEL_PATH=/models/Xiaomi-Robotics-1-RoboCasa365 BASE_PORT=10086 SERVER_ADDR=127.0.0.1 \
+    PYTHONUNBUFFERED=1 UV_LINK_MODE=copy
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential ca-certificates cmake curl ffmpeg git git-lfs libegl1 libgl1 libgles2 libglfw3 libglew2.2 \
+      libglib2.0-0 libglvnd0 libosmesa6 libsm6 libx11-6 libxext6 libxrender1 ninja-build patchelf pkg-config python3-pip \
+    && rm -rf /var/lib/apt/lists/* \
+    && python3 -m pip install --break-system-packages --no-cache-dir uv \
+    && uv python install 3.10.20
+
+WORKDIR /opt
+RUN git clone https://github.com/ARISE-Initiative/robosuite.git robosuite && git -C robosuite checkout "${ROBOSUITE_COMMIT}" \
+    && git clone https://github.com/robocasa/robocasa.git robocasa && git -C robocasa checkout "${ROBOCASA_COMMIT}"
+
+COPY docker/requirements-xr1-server.lock /tmp/requirements-xr1-server.lock
+COPY docker/requirements-robocasa365-client.lock /tmp/requirements-robocasa365-client.lock
+RUN uv venv --python 3.10.20 /opt/venvs/xr1-server && uv venv --python 3.10.20 /opt/venvs/robocasa365-client \
+    && test -n "${PYTORCH_ARM64_INSTALL_COMMAND}" && /bin/sh -c "${PYTORCH_ARM64_INSTALL_COMMAND}" \
+    && uv pip install --python /opt/venvs/xr1-server/bin/python -r /tmp/requirements-xr1-server.lock \
+    && uv pip install --python /opt/venvs/robocasa365-client/bin/python -r /tmp/requirements-robocasa365-client.lock \
+    && uv pip install --python /opt/venvs/robocasa365-client/bin/python -e /opt/robosuite -e /opt/robocasa
+
+COPY . /opt/Xiaomi-Robotics-1
+RUN groupadd --gid "${APP_GID}" xr1 && useradd --uid "${APP_UID}" --gid "${APP_GID}" --create-home --shell /bin/bash xr1 \
+    && mkdir -p /cache/huggingface/modules /cache/numba /models /results \
+    && chmod +x /opt/Xiaomi-Robotics-1/docker/entrypoint-dgx-spark.sh \
+    && chown -R xr1:xr1 /opt/Xiaomi-Robotics-1 /opt/venvs /cache /results
+WORKDIR /opt/Xiaomi-Robotics-1
+USER xr1
+ENTRYPOINT ["/opt/Xiaomi-Robotics-1/docker/entrypoint-dgx-spark.sh"]
+CMD ["shell"]
